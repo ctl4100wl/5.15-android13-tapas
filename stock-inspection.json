@@ -1,0 +1,16 @@
+{
+  "path": "/mnt/c/Users/Admin/AppData/Local/Temp/codex-file-preview-bdsg6W/boot.img",
+  "bytes": 100663296,
+  "sha256": "dcdabe280990a7d6f26e2aa4512a49558bc496a91e6ab6215b95d70f01aab6b0",
+  "magic": "b'ANDROID!'",
+  "header_version": 4,
+  "header_size": 1584,
+  "kernel_size": 47577600,
+  "ramdisk_size": 0,
+  "os_version_raw": 0,
+  "cmdline": "",
+  "signature_size": 0,
+  "kernel_magic_at_56": "41524d64",
+  "kernel_sha256": "89762cce5bae8c653fabd878ad1f8991b8a63379abbfb3496fd5a7cfd069605e",
+  "avb_footer": "AVBf"
+}
