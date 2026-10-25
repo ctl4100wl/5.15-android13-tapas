@@ -249,15 +249,34 @@ jobs:
           echo " Building: ${{ matrix.target }}"
           echo "========================================"
 
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          test -s common/fs/exec.c
+          if grep -nE 'ksu_setup_preinit_file|ksu_preinit_handle_post_execveat' common/fs/exec.c; then
+            echo "::error::Stale UAPI 6 preinit hooks remain in fs/exec.c"
+            exit 1
+          fi
           tools/bazel \
             --output_user_root="$BAZEL_OUTPUT_ROOT" \
             build \
+            --verbose_failures \
             --disk_cache="$BAZEL_DISK_CACHE" \
-            //common:${{ matrix.target }}
+            //common:${{ matrix.target }} 2>&1 | tee "$GITHUB_WORKSPACE/artifacts/kernel-build.log"
 
       # ============================================================
       # 10. VERSION CHECK
       # ============================================================
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}-build-diagnostics
+          path: |
+            artifacts/kernel-build.log
+            artifacts/ksun-susfs-uapi5-build.json
+          if-no-files-found: ignore
+          compression-level: 1
+          retention-days: 14
 
       - name: Package AnyKernel3
         shell: bash
