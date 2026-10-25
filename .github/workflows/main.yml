@@ -168,18 +168,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cd "$HOME/ack/common"
-          git submodule update --init KernelSU-Next-SuSFS
-          driver="$HOME/ack/common/KernelSU-Next-SuSFS"
-          if [ "$(git -C "$driver" rev-parse --is-shallow-repository)" = true ]; then
-            git -C "$driver" fetch --unshallow --tags origin
-          else
-            git -C "$driver" fetch --tags origin
-          fi
+          # Use an independent driver clone: repo-managed checkouts need not
+          # have an origin remote or independently usable submodule metadata.
+          driver="$RUNNER_TEMP/chickernel-ksun-susfs"
+          git clone --single-branch --branch ksun-dev-susfs \
+            https://github.com/ctl4100wl/5.15-android13-tapas.git "$driver"
           git -C "$driver" checkout --detach 715962008d9bc6ced66fc1efd4a61b252bf19284
+          test "$(git -C "$driver" rev-parse --show-toplevel)" = "$driver"
           mkdir -p "$GITHUB_WORKSPACE/artifacts"
           python3 "$GITHUB_WORKSPACE/scripts/prepare-ksun-susfs.py" \
             "$driver" "$GITHUB_WORKSPACE/artifacts/ksun-susfs-uapi5-build.json"
+          destination="$HOME/ack/common/KernelSU-Next-SuSFS"
+          test -d "$destination"
+          test ! -L "$destination"
+          mv "$destination" "$RUNNER_TEMP/original-ksun-susfs"
+          mv "$driver" "$destination"
 
       # ============================================================
       # 7. BAZEL CACHE
