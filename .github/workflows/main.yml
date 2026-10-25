@@ -37,6 +37,11 @@ jobs:
       USE_CCACHE: "0"
 
     steps:
+      - name: Checkout packaging files
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
       # ============================================================
       # 1. FREE DISK SPACE
       # ============================================================
@@ -260,6 +265,32 @@ jobs:
       # ============================================================
       # 10. VERSION CHECK
       # ============================================================
+
+      - name: Package AnyKernel3
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          case "$TARGET" in
+            chickernel_ksun) variant=KSUN ;;
+            chickernel_ksun_susfs) variant=KSUN-SuSFS ;;
+            *) exit 1 ;;
+          esac
+          bash "$GITHUB_WORKSPACE/scripts/package-anykernel3.sh" \
+            "$HOME/ack/bazel-bin/common/$TARGET/Image" \
+            "$variant" "$GITHUB_WORKSPACE/artifacts"
+
+      - name: Upload AnyKernel3
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}-AnyKernel3
+          path: |
+            artifacts/ChicKernel-*-AnyKernel3.zip
+            artifacts/ChicKernel-*-AnyKernel3.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
 
       - name: Check KSU version and SuSFS
         if: success()
