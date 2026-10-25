@@ -1,0 +1,308 @@
+diff --git a/kernel/Kbuild b/kernel/Kbuild
+index fe00302a..d7e8b0ab 100644
+--- a/kernel/Kbuild
++++ b/kernel/Kbuild
+@@ -73,41 +73,6 @@ endif
+ 
+ ccflags-y += -I$(KSU_KERNEL_DIR) -I$(KSU_KERNEL_DIR)/include
+ 
+-# preinit runner: a static nolibc binary embedded into kernelsu, see preinit/.
+-# It is built against the installed UAPI headers of the target kernel
+-# (CONFIG_HEADERS_INSTALL, enabled by gki_defconfig).
+-KSU_UAPI_INC := $(objtree)/usr/include
+-ifneq ($(wildcard $(KSU_UAPI_INC)/linux/unistd.h),)
+-kernelsu-objs += preinit/preinit.o
+-kernelsu-objs += preinit/blob.o
+-
+-KSU_RUNNER_CFLAGS := $(CLANG_FLAGS) -std=gnu11 -Os -Wall \
+-	-nostdinc -isystem $(shell $(CC) -print-file-name=include) \
+-	-I$(KSU_KERNEL_DIR)/preinit/runner/nolibc -I$(KSU_UAPI_INC) \
+-	-I$(KSU_KERNEL_DIR)/include \
+-	-ffreestanding -fno-stack-protector -fno-pic -fno-pie \
+-	-fno-asynchronous-unwind-tables -fno-unwind-tables \
+-	-ffunction-sections -fdata-sections
+-
+-quiet_cmd_ksu_runner = RUNNER  $@
+-      cmd_ksu_runner = $(CC) $(KSU_RUNNER_CFLAGS) -c -o $@.o $< && \
+-		$(LD) -static -nostdlib -e _start --gc-sections -s -o $@ $@.o && \
+-		rm -f $@.o
+-
+-$(obj)/preinit/runner.elf: $(KSU_KERNEL_DIR)/preinit/runner/runner.c \
+-		$(wildcard $(KSU_KERNEL_DIR)/preinit/runner/nolibc/*.h \
+-			   $(KSU_KERNEL_DIR)/preinit/runner/nolibc/sys/*.h \
+-			   $(KSU_KERNEL_DIR)/include/uapi/*.h) FORCE
+-	$(call if_changed,ksu_runner)
+-
+-targets += preinit/runner.elf
+-$(obj)/preinit/blob.o: $(obj)/preinit/runner.elf
+-asflags-y += -DKSU_PREINIT_RUNNER_BIN=\"$(obj)/preinit/runner.elf\"
+-else
+-$(warning -- KernelSU: $(KSU_UAPI_INC) not found, preinit disabled)
+-ccflags-y += -DKSU_NO_PREINIT
+-endif
+-
+ obj-$(CONFIG_KSU) += kernelsu.o
+ 
+ LPATH := /usr/bin/env PATH="$$PATH":/usr/bin:/usr/local/bin
+diff --git a/kernel/core/init.c b/kernel/core/init.c
+index 3f79f515..9846ed16 100644
+--- a/kernel/core/init.c
++++ b/kernel/core/init.c
+@@ -25,7 +25,6 @@
+ #include "feature/selinux_hide.h"
+ #include "feature/module_blacklist.h"
+ #include "feature/shell_su_adb_only.h"
+-#include "preinit/preinit.h"
+ #include "hook/setuid_hook.h"
+ #include "feature/sucompat.h"
+ 
+@@ -138,7 +137,6 @@ int __init kernelsu_init(void)
+ 
+     ksu_ksud_init();
+ 
+-    ksu_preinit_init();
+ 
+     ksu_file_wrapper_init();
+ 
+@@ -153,7 +151,6 @@ void __exit kernelsu_exit(void)
+ 
+     ksu_ksud_exit();
+ 
+-    ksu_preinit_exit();
+ 
+     // Wait for any in-flight RCU readers (e.g. handler traversing allow_list)
+     synchronize_rcu();
+diff --git a/kernel/hook/syscall_event_bridge.c b/kernel/hook/syscall_event_bridge.c
+index cfa58371..31086a1e 100644
+--- a/kernel/hook/syscall_event_bridge.c
++++ b/kernel/hook/syscall_event_bridge.c
+@@ -19,7 +19,6 @@
+ #include "hook/syscall_hook.h"
+ #include "hook/syscall_event_bridge.h"
+ #include "feature/adb_root.h"
+-#include "preinit/preinit.h"
+ 
+ static int ksu_handle_init_mark_tracker(const char __user **filename_user)
+ {
+@@ -91,15 +90,6 @@ static long __nocfi ksu_hook_execve_common(int orig_nr, const struct pt_regs *re
+         }
+     }
+ 
+-    /*
+-     * Newer Android releases' init execs selinux_setup with execveat()
+-     * rather than execve(). Only an AT_EMPTY_PATH exec of an fd has no
+-     * path for preinit to swap.
+-     */
+-    if (unlikely(current->pid == 1) && (!execveat || !(PT_REGS_PARM5(regs) & AT_EMPTY_PATH)) &&
+-        ksu_preinit_handle_execve(filename_user, argv_user, orig_nr, (struct pt_regs *)regs, &ret))
+-        return ret;
+-
+     if (current_euid().val == 0)
+         pending_root_execve = ksu_sulog_capture_root_execve(*filename_user, argv_user, GFP_KERNEL);
+ 
+diff --git a/kernel/runtime/ksud_integration.c b/kernel/runtime/ksud_integration.c
+index 75265336..4f96ba70 100644
+--- a/kernel/runtime/ksud_integration.c
++++ b/kernel/runtime/ksud_integration.c
+@@ -26,7 +26,6 @@
+ #include "runtime/ksud_boot.h"
+ #include "policy/feature.h"
+ #include "selinux/selinux.h"
+-#include "preinit/preinit.h"
+ 
+ DEFINE_STATIC_KEY_TRUE(ksu_is_init_rc_hook_enabled);
+ DEFINE_STATIC_KEY_TRUE(ksu_is_input_hook_enabled);
+@@ -138,7 +137,7 @@ int ksu_handle_execveat_ksud(int *fd, struct filename **filename_ptr,
+             char buf[16];
+             if (check_argv(*argv, 1, "second_stage", buf, sizeof(buf))) {
+                 pr_info("/system/bin/init second_stage executed\n");
+-                ksu_preinit_release();
++
+                 ksu_selinux_hide_handle_second_stage();
+                 apply_kernelsu_rules();
+                 cache_sid();
+@@ -155,7 +154,7 @@ int ksu_handle_execveat_ksud(int *fd, struct filename **filename_ptr,
+             char buf[16];
+             if (check_argv(*argv, 1, "-Xzygote", buf, sizeof(buf))) {
+                 pr_info("exec zygote, /data prepared, second_stage: %d\n", !static_key_enabled(&is_init_second_stage_not_executed));
+-                ksu_preinit_release();
++
+                 on_post_fs_data();
+                 static_branch_disable(&is_first_zygote);
+             }
+diff --git a/kernel/supercall/dispatch.c b/kernel/supercall/dispatch.c
+index f0680dd6..12d77dd2 100644
+--- a/kernel/supercall/dispatch.c
++++ b/kernel/supercall/dispatch.c
+@@ -26,7 +26,6 @@
+ #include "sulog/fd.h"
+ #include "supercall/supercall.h"
+ #include "infra/symbol_resolver.h"
+-#include "preinit/preinit.h"
+ 
+ static int do_grant_root(void __user *arg)
+ {
+@@ -58,10 +57,6 @@ static int do_get_info(void __user *arg)
+     if (is_manager()) {
+         cmd.flags |= KSU_GET_INFO_FLAG_MANAGER;
+     }
+-    // A late load never sees PID 1's selinux_setup, so preinit cannot run.
+-    if (ksu_preinit_enabled_param()) {
+-        cmd.flags |= KSU_GET_INFO_FLAG_PREINIT;
+-    }
+     cmd.features = KSU_FEATURE_MAX;
+     cmd.uapi_version = KERNEL_SU_UAPI_VERSION;
+ 
+@@ -853,85 +848,6 @@ static int do_disable_escape_to_root(void __user *arg)
+     return 0;
+ }
+ 
+-/*
+- * Resolve symbols of the running kernel image, exported or not, matching
+- * them like ksuinit's /proc/kallsyms walk. Userspace uses this to bind a
+- * module's undefined symbols before init_module, so the kernel never parses
+- * the module ELF itself.
+- */
+-static int do_lookup_symbols(void __user *arg)
+-{
+-    struct ksu_lookup_symbols_cmd cmd;
+-    const u64 __user *unames;
+-    u64 __user *uaddrs;
+-    char **names;
+-    unsigned long *addrs;
+-    int ret = 0;
+-    u32 i;
+-
+-    if (copy_from_user(&cmd, arg, sizeof(cmd)))
+-        return -EFAULT;
+-
+-    if (cmd.flags) {
+-        pr_err("lookup_symbols: unsupported flags 0x%x\n", cmd.flags);
+-        return -EINVAL;
+-    }
+-    if (!cmd.count || cmd.count > KSU_LOOKUP_SYMBOLS_MAX)
+-        return -EINVAL;
+-
+-    names = kvcalloc(cmd.count, sizeof(*names), GFP_KERNEL);
+-    addrs = kvcalloc(cmd.count, sizeof(*addrs), GFP_KERNEL);
+-    if (!names || !addrs) {
+-        ret = -ENOMEM;
+-        goto out;
+-    }
+-
+-    unames = (const u64 __user *)(uintptr_t)cmd.names;
+-    uaddrs = (u64 __user *)(uintptr_t)cmd.addrs;
+-    for (i = 0; i < cmd.count; i++) {
+-        u64 uname;
+-        char *name;
+-
+-        if (get_user(uname, unames + i)) {
+-            ret = -EFAULT;
+-            goto out;
+-        }
+-        name = strndup_user((const char __user *)(uintptr_t)uname, KSYM_NAME_LEN);
+-        if (IS_ERR(name)) {
+-            // An overlong name cannot be a kernel symbol: report it missing.
+-            if (PTR_ERR(name) == -EINVAL)
+-                continue;
+-            ret = PTR_ERR(name);
+-            goto out;
+-        }
+-        if (!*name) {
+-            kfree(name);
+-            continue;
+-        }
+-        names[i] = name;
+-    }
+-
+-    ret = ksu_lookup_kernel_symbols((const char *const *)names, addrs, cmd.count);
+-    if (ret < 0)
+-        goto out;
+-
+-    for (i = 0; i < cmd.count; i++) {
+-        if (put_user((u64)addrs[i], uaddrs + i)) {
+-            ret = -EFAULT;
+-            goto out;
+-        }
+-    }
+-
+-out:
+-    if (names) {
+-        for (i = 0; i < cmd.count; i++)
+-            kfree(names[i]);
+-    }
+-    kvfree(names);
+-    kvfree(addrs);
+-    return ret;
+-}
+-
+ // IOCTL handlers mapping table
+ // clang-format off
+ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
+@@ -1081,12 +997,6 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
+         .perm_check = only_root,
+         .allow_su_session = true
+     },
+-    {
+-        .cmd = KSU_IOCTL_LOOKUP_SYMBOLS,
+-        .name = "LOOKUP_SYMBOLS",
+-        .handler = do_lookup_symbols,
+-        .perm_check = only_root
+-    },
+     {
+         .cmd = KSU_IOCTL_GET_HOOK_MODE,
+         .name = "GET_HOOK_MODE",
+diff --git a/uapi/supercall.h b/uapi/supercall.h
+index c42745d3..eaf4d7fd 100644
+--- a/uapi/supercall.h
++++ b/uapi/supercall.h
+@@ -10,8 +10,7 @@
+ // 3: scoped su-session driver fd
+ // 4: add KSU_GET_INFO_FLAG_BUNDLED
+ // 5: add EVENT_SERVICES with a start/skip result
+-// 6: add KSU_IOCTL_LOOKUP_SYMBOLS and KSU_GET_INFO_FLAG_PREINIT; modules.rc and preinit may live under /metadata/vold/ksu
+-static const __u32 KERNEL_SU_UAPI_VERSION = 6;
++static const __u32 KERNEL_SU_UAPI_VERSION = 5;
+ 
+ /* Magic numbers for reboot hook to install fd */
+ static const __u32 KSU_INSTALL_MAGIC1 = 0xDEADBEEF;
+@@ -39,8 +38,6 @@ static const __u32 KSU_GET_INFO_FLAG_MANAGER = (1U << 1);
+ static const __u32 KSU_GET_INFO_FLAG_LATE_LOAD = (1U << 2);
+ static const __u32 KSU_GET_INFO_FLAG_PR_BUILD = (1U << 3);
+ static const __u32 KSU_GET_INFO_FLAG_BUNDLED = (1U << 4);
+-/* The preinit runner will run module preinit actions on boot */
+-static const __u32 KSU_GET_INFO_FLAG_PREINIT = (1U << 5);
+ 
+ struct ksu_get_info_cmd {
+     __u32 version; /* Output: KERNEL_SU_VERSION */
+@@ -172,22 +169,6 @@ struct ksu_get_sulog_fd_cmd {
+     __u32 flags; /* Input: reserved for future use, must be 0 */
+ };
+ 
+-/*
+- * Batch kernel image symbol lookup. Returns the number of symbols found; the
+- * address of a symbol that does not exist in the running kernel is set to 0.
+- * Matches like ksuinit's /proc/kallsyms walk: a kernel symbol name is cut at
+- * its first '$', else at ".llvm.", and the first match in kallsyms order wins.
+- * Module symbols are never returned.
+- */
+-struct ksu_lookup_symbols_cmd {
+-    __aligned_u64 names; /* Input: user pointer to `count` user pointers to null-terminated names */
+-    __aligned_u64 addrs; /* Output: user pointer to `count` __u64 symbol addresses */
+-    __u32 count; /* Input: number of symbols, at most KSU_LOOKUP_SYMBOLS_MAX */
+-    __u32 flags; /* Input: reserved for future use, must be 0 */
+-};
+-
+-static const __u32 KSU_LOOKUP_SYMBOLS_MAX = 1024;
+-
+ static const __u8 KSU_UMOUNT_WIPE = 0; /* ignore everything and wipe list */
+ static const __u8 KSU_UMOUNT_ADD = 1; /* add entry (path + flags) */
+ static const __u8 KSU_UMOUNT_DEL = 2; /* delete entry, strcmp */
+@@ -220,7 +201,6 @@ static const __u32 KSU_IOCTL_ADD_TRY_UMOUNT = _IOC(_IOC_WRITE, 'K', 18, 0);
+ static const __u32 KSU_IOCTL_SET_INIT_PGRP = _IO('K', 19);
+ static const __u32 KSU_IOCTL_GET_SULOG_FD = _IOW('K', 20, struct ksu_get_sulog_fd_cmd);
+ static const __u32 KSU_IOCTL_DISABLE_ESCAPE_TO_ROOT = _IO('K', 21);
+-static const __u32 KSU_IOCTL_LOOKUP_SYMBOLS = _IOW('K', 22, struct ksu_lookup_symbols_cmd);
+ static const __u32 KSU_IOCTL_GET_HOOK_MODE = _IOC(_IOC_READ, 'K', 98, 0);
+ static const __u32 KSU_IOCTL_GET_VERSION_TAG = _IOC(_IOC_READ, 'K', 99, 0);
+ 

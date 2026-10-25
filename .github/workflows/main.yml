@@ -1,4 +1,4 @@
-name: Build ChicKernel (KSUN / KSUN+SuSFS)
+name: Build ChicKernel (KSUN+SuSFS UAPI 5)
 
 on:
   workflow_dispatch:
@@ -23,7 +23,6 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - chickernel_ksun
           - chickernel_ksun_susfs
 
     env:
@@ -165,31 +164,22 @@ jobs:
       # 6. FULL KSU HISTORY
       # ============================================================
 
-      - name: Full-history KernelSU submodules
+      - name: Prepare KSUN+SuSFS UAPI 5
         shell: bash
         run: |
           set -euo pipefail
-
           cd "$HOME/ack/common"
-
-          git submodule update --init --recursive
-
-          for s in KernelSU-Next KernelSU-Next-SuSFS; do
-            if [ -d "$s/.git" ] || [ -f "$s/.git" ]; then
-
-              git -C "$s" fetch --unshallow 2>/dev/null || true
-
-              COUNT=$(git -C "$s" rev-list --count HEAD)
-              VERSION=$((30000 + COUNT))
-
-              echo "$s:"
-              echo "  Commits: $COUNT"
-              echo "  KSU_VERSION: $VERSION"
-
-            else
-              echo "Skipping missing submodule: $s"
-            fi
-          done
+          git submodule update --init KernelSU-Next-SuSFS
+          driver="$HOME/ack/common/KernelSU-Next-SuSFS"
+          if [ "$(git -C "$driver" rev-parse --is-shallow-repository)" = true ]; then
+            git -C "$driver" fetch --unshallow --tags origin
+          else
+            git -C "$driver" fetch --tags origin
+          fi
+          git -C "$driver" checkout --detach 715962008d9bc6ced66fc1efd4a61b252bf19284
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          python3 "$GITHUB_WORKSPACE/scripts/prepare-ksun-susfs.py" \
+            "$driver" "$GITHUB_WORKSPACE/artifacts/ksun-susfs-uapi5-build.json"
 
       # ============================================================
       # 7. BAZEL CACHE
@@ -199,10 +189,10 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.BAZEL_DISK_CACHE }}
-          key: bazel-v1-${{ runner.os }}-${{ matrix.target }}-${{ github.sha }}-${{ github.run_id }}
+          key: bazel-uapi5-v1-${{ runner.os }}-${{ matrix.target }}-${{ github.sha }}-${{ github.run_id }}
           restore-keys: |
-            bazel-v1-${{ runner.os }}-${{ matrix.target }}-
-            bazel-v1-${{ runner.os }}-
+            bazel-uapi5-v1-${{ runner.os }}-${{ matrix.target }}-
+            bazel-uapi5-v1-${{ runner.os }}-
 
       # ============================================================
       # 8. CCACHE
@@ -273,7 +263,6 @@ jobs:
         run: |
           set -euo pipefail
           case "$TARGET" in
-            chickernel_ksun) variant=KSUN ;;
             chickernel_ksun_susfs) variant=KSUN-SuSFS ;;
             *) exit 1 ;;
           esac
@@ -288,6 +277,7 @@ jobs:
           path: |
             artifacts/ChicKernel-*-AnyKernel3.zip
             artifacts/ChicKernel-*-AnyKernel3.zip.sha256
+            artifacts/ksun-susfs-uapi5-build.json
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -351,7 +341,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ env.BAZEL_DISK_CACHE }}
-          key: bazel-v1-${{ runner.os }}-${{ matrix.target }}-${{ github.sha }}-${{ github.run_id }}
+          key: bazel-uapi5-v1-${{ runner.os }}-${{ matrix.target }}-${{ github.sha }}-${{ github.run_id }}
 
       # ============================================================
       # 14. SAVE CCACHE
