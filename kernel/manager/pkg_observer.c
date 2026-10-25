@@ -8,6 +8,7 @@
 #include <linux/rculist.h>
 #include <linux/task_work.h>
 #include <linux/version.h>
+#include <linux/susfs.h>
 #include "klog.h" // IWYU pragma: keep
 #include "manager/throne_tracker.h"
 
@@ -40,6 +41,9 @@ static void ksu_track_throne_tw_func(struct callback_head *cb)
 static void ksu_defer_track_throne(void)
 {
     struct callback_head *cb;
+
+    // Renew the getpriority uid bitmap filter
+    susfs_parse_priority_app_strings();
 
     if (!(current->flags & PF_KTHREAD)) {
         cb = kzalloc(sizeof(*cb), GFP_KERNEL);

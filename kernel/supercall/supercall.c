@@ -69,21 +69,21 @@ static int ksu_install_fd_with_permissions(unsigned int fd_flags, unsigned long 
 
     fd = get_unused_fd_flags(fd_flags);
     if (fd < 0) {
-        pr_err("ksu_install_fd: failed to get unused fd\n");
+        pr_err("ksu_install_fd: failed to get unused fd for %s\n", name);
         kfree(context);
         return fd;
     }
 
     filp = anon_inode_getfile(name, &anon_ksu_fops, context, O_RDWR);
     if (IS_ERR(filp)) {
-        pr_err("ksu_install_fd: failed to create anon inode file\n");
+        pr_err("ksu_install_fd: failed to create anon inode file for %s\n", name);
         put_unused_fd(fd);
         kfree(context);
         return PTR_ERR(filp);
     }
 
     fd_install(fd, filp);
-    pr_info("ksu fd installed: %d for pid %d\n", fd, current->pid);
+    pr_info("%s fd installed: %d for pid %d\n", name, fd, current->pid);
     return fd;
 }
 
@@ -119,36 +119,37 @@ static void ksu_install_fd_tw_func(struct callback_head *cb)
     kfree(tw);
 }
 
-static int reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
+int ksu_supercall_reboot_handler(void __user **arg)
 {
-    struct pt_regs *real_regs = PT_REAL_REGS(regs);
-    int magic1 = (int)PT_REGS_SYSCALL_PARM1(real_regs);
-    int magic2 = (int)PT_REGS_PARM2(real_regs);
-    unsigned int cmd = (unsigned int)PT_REGS_PARM3(real_regs);
-    unsigned long arg4 = (unsigned long)PT_REGS_SYSCALL_PARM4(real_regs);
-    unsigned long reply = (unsigned long)arg4;
+    struct ksu_install_fd_tw *tw;
 
-    /* Check if this is a request to install KSU fd */
-    if (magic1 == KSU_INSTALL_MAGIC1 && magic2 == KSU_INSTALL_MAGIC2) {
-        struct ksu_install_fd_tw *tw;
+    tw = kzalloc(sizeof(*tw), GFP_KERNEL);
+    if (!tw)
+        return 0;
 
-        tw = kzalloc(sizeof(*tw), GFP_ATOMIC);
-        if (!tw)
-            return 0;
+    tw->outp = (int __user *)(*arg);
+    tw->cb.func = ksu_install_fd_tw_func;
 
-        tw->outp = (int __user *)arg4;
-        tw->cb.func = ksu_install_fd_tw_func;
-
-        if (task_work_add(current, &tw->cb, TWA_RESUME)) {
-            kfree(tw);
-            pr_warn("install fd add task_work failed\n");
-        }
+    if (task_work_add(current, &tw->cb, TWA_RESUME)) {
+        kfree(tw);
+        pr_warn("install fd add task_work failed\n");
     }
+
+    return 0;
+}
+
+// KernelSU-Next extra sys_reboot commands, these used to live in the reboot kprobe.
+// Called from ksu_handle_sys_reboot() for every reboot syscall, the syscall then
+// continues into the original reboot flow just like it did with the kprobe.
+void ksu_supercall_ksun_reboot_handler(int magic2, unsigned int cmd, void __user **arg)
+{
+    unsigned long arg4 = (unsigned long)(*arg);
+    unsigned long reply = (unsigned long)arg4;
 
     if (magic2 == CHANGE_MANAGER_UID) {
         /* only root is allowed for this command */
         if (current_uid().val != 0)
-            return 0;
+            return;
 
         pr_info("sys_reboot: ksu_set_manager_appid to: %d\n", cmd);
         ksu_set_manager_appid(cmd);
@@ -158,30 +159,30 @@ static int reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
                 pr_info("sys_reboot: reply fail\n");
         }
 
-        return 0;
+        return;
     }
 
     if (magic2 == GET_SULOG_DUMP_V2) {
         if (current_uid().val != 0)
-            return 0;
+            return;
 
         int ret = ksu_sulog_handle_compat_dump((void __user *)arg4);
         if (ret)
-            return 0;
+            return;
 
         if (copy_to_user((void __user *)arg4, &reply, sizeof(reply) ))
-            return 0;
+            return;
     }
 
     if (magic2 == CHANGE_KSUVER) {
         if (current_uid().val != 0)
-            return 0;
+            return;
 
         pr_info("sys_reboot: ksu_change_ksuver to: %d\n", cmd);
         ksuver_override = cmd;
 
         if (copy_to_user((void __user *)arg4, &reply, sizeof(reply) ))
-            return 0;
+            return;
     }
 
     // WARNING!!! triple ptr zone! ***
@@ -189,7 +190,7 @@ static int reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
     if (magic2 == CHANGE_SPOOF_UNAME) {
         // only root is allowed for this command
         if (current_uid().val != 0)
-            return 0;
+            return;
 
         char release_buf[65];
         char version_buf[65];
@@ -208,7 +209,7 @@ static int reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
 
         // arg here is ***, pull out user-space ** via copy_from_user
         if (copy_from_user(&u_pptr, ppptr, sizeof(u_pptr)))
-            return 0;
+            return;
 
         pr_info("sys_reboot: u_pptr: 0x%lx \n", (uintptr_t)u_pptr);
 
@@ -216,18 +217,18 @@ static int reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
         // we cannot dereference this as this is __user
         // we just do another copy_from_user to get it
         if (copy_from_user(&u_ptr, (void __user *)u_pptr, sizeof(u_ptr)))
-            return 0;
+            return;
 
         pr_info("sys_reboot: u_ptr: 0x%lx \n", (uintptr_t)u_ptr);
 
         // for release
         if (strncpy_from_user(release_buf, (char __user *)u_ptr, sizeof(release_buf)) < 0)
-            return 0;
+            return;
         release_buf[sizeof(release_buf) - 1] = '\0';
 
         // for version
         if (strncpy_from_user(version_buf, (char __user *)(u_ptr + strlen(release_buf) + 1), sizeof(version_buf)) < 0)
-            return 0;
+            return;
         version_buf[sizeof(version_buf) - 1] = '\0';
 
         if (original_release_buf[0] == '\0') {
@@ -255,33 +256,16 @@ static int reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
 
         // we write our confirmation on **
         if (copy_to_user((void __user *)arg4, &reply, sizeof(reply)))
-            return 0;
+            return;
     }
-
-    return 0;
 }
-
-static struct kprobe reboot_kp = {
-    .symbol_name = REBOOT_SYMBOL,
-    .pre_handler = reboot_handler_pre,
-};
 
 void __init ksu_supercalls_init(void)
 {
-    int rc;
-
     ksu_supercall_dump_commands();
-
-    rc = register_kprobe(&reboot_kp);
-    if (rc) {
-        pr_err("reboot kprobe failed: %d\n", rc);
-    } else {
-        pr_info("reboot kprobe registered successfully\n");
-    }
 }
 
 void __exit ksu_supercalls_exit(void)
 {
-    unregister_kprobe(&reboot_kp);
     ksu_supercall_cleanup_state();
 }
