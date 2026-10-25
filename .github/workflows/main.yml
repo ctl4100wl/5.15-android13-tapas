@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - upstream-ksun-susfs
+      - kernel-ksun-susfs
 
 permissions:
   contents: read
