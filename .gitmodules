@@ -1,0 +1,12 @@
+[submodule "KSUN"]
+	path = KernelSU-Next
+	url = https://github.com/KernelSU-Next/KernelSU-Next
+	branch = dev
+[submodule "KSUN-SuSFS"]
+	path = KernelSU-Next-SuSFS
+	url = https://github.com/ctl4100wl/5.15-android13-tapas
+	branch = ksun-dev-susfs
+[submodule "BBG"]
+	path = Baseband-guard
+	url = https://github.com/vc-teahouse/Baseband-guard
+	shallow = true

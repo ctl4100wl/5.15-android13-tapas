@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# KernelSU-Next is shipped twice:
+#  - next/       : upstream KernelSU-Next, hooks syscalls by itself (needs KPROBES)
+#  - next-susfs/ : KernelSU-Next patched for SuSFS, relies on the inline hooks
+#                  from the susfs kernel patch (CONFIG_KSU_SUSFS)
+#
+# The SuSFS tree carries every upstream option plus the SuSFS menu, so only its
+# Kconfig is sourced. drivers/kernelsu/Makefile picks the tree to build.
+source "drivers/kernelsu/next-susfs/Kconfig"
